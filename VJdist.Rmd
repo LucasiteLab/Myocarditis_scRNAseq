@@ -1,0 +1,257 @@
+---
+title: "VJ Usage"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(scRepertoire)
+library(dplyr)
+library(data.table)
+library(textshape)
+```
+
+```{r}
+# Import TCR data and seurat data
+combined <- readRDS("ClonotypeAnalysis/combined_contigs_allTCR.rds")
+seurat <- readRDS("VDJAnalysis/carditis_v3.2_annotation_seurat_final.rds")
+
+Idents(seurat) <- "General_Annotation"
+seurat_cd8mem <- subset(seurat, idents = c('CD8 CTL', 'Prolif T', 'CD4 CTL'))
+Idents(seurat_cd8mem) <- "Condition"
+seurat_cd8mem <- subset(seurat_cd8mem, idents = c('Healthy', 'Booster', 'Carditis', 'Recovered'))
+
+
+meta <- seurat_cd8mem@meta.data
+
+seq_id <- seurat_cd8mem@meta.data[,2]
+vec <- sapply(seq_id, function(foo) {strsplit(foo, split = '_')[[1]][1]})
+meta$orig.barcode <- vec
+barcodes <- paste(meta$sample, meta$Condition, vec, sep = "_")
+
+rownames(meta) <- barcodes
+seurat_cd8mem@meta.data <- meta
+```
+
+
+```{r}
+seurat_annot <- combineExpression(combined, seurat_cd8mem, group.by = "sample") 
+
+# Merge in T cell data to annotated Seurat object
+# Split CTgene by "_", take last element, then split further by ".", take first and third element
+# Split CTaa by "_", take first element as CDR3a, and second element as CDR3b
+
+gene_to_split <- seurat_annot@meta.data$CTgene
+trb_vec <- sapply(gene_to_split, function(foo) {strsplit(foo, split = '_')[[1]][2]})
+trbv_vec <- sapply(trb_vec, function(foo) {strsplit(foo, split = '\\.')[[1]][1]})
+trbj_vec <- sapply(trb_vec, function(foo) {strsplit(foo, split = '\\.')[[1]][3]})
+
+cdr3_to_split <- seurat_annot@meta.data$CTaa
+cdr3a_vec <- sapply(cdr3_to_split, function(foo) {strsplit(foo, split = '_')[[1]][1]})
+cdr3b_vec <- sapply(cdr3_to_split, function(foo) {strsplit(foo, split = '_')[[1]][2]})
+
+
+seurat_annot$trbv_genes <- trbv_vec
+seurat_annot$trbj_genes <- trbj_vec
+seurat_annot$cdr3a_aa <- cdr3a_vec
+seurat_annot$cdr3b_aa <- cdr3b_vec
+```
+
+
+```{r}
+# Make a TCR data frame
+
+cdr3_df <- data.frame(cdr3b_vec, trbv_vec, trbj_vec, cdr3a_vec, seurat_annot$sample, seurat_annot$Condition, seurat_annot$General_Annotation)
+cdr3_df$sample.condition <- paste0(seurat_annot$sample, ":", seurat_annot$Condition)
+cdr3_df <- na.omit(cdr3_df)
+write.csv(cdr3_df, file = "cdr3_vgene_jgene_allTCR_condition_sep_prolifcyto.csv", row.names = TRUE)
+```
+
+
+VJ Distribution
+
+```{r}
+
+cdr3_df <- read.csv("scRepertoire/cdr3_vgene_jgene_allTCR_condition_sep.csv")
+rownames(cdr3_df) <- cdr3_df$X
+cdr3_df[,1] <- NULL
+table(cdr3_df$seurat_annot.Condition)   
+
+## Iterate on annotations
+cdr3_prolif <- cdr3_df %>% filter(seurat_annot.Tcell_Annotation %in% c("Prolif T", "CD4 cytotoxic T", "CD8 cytotoxic T"))
+table(cdr3_prolif$seurat_annot.Condition)  
+chd <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "C.HD",]
+carditis <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "Carditis",]
+misc <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "MIS-C",]
+
+carditis <- carditis[sample(nrow(carditis), nrow(chd)), ]
+misc <- misc[sample(nrow(misc), nrow(chd)), ]
+
+
+```
+
+
+```{r}
+# Add error bars (SEM) - Repeat above, preserving patients
+trbv_count <- as.data.frame(table(chd$trbv_vec, chd$seurat_annot.sample))
+trbv_count$Condition <- "HD"
+trbv_count$Percentage <- (trbv_count$Freq/sum(trbv_count$Freq))*100
+
+trbv_count_carditis <- as.data.frame(table(carditis$trbv_vec, carditis$seurat_annot.sample))
+trbv_count_carditis$Condition <- "Carditis"
+trbv_count_carditis$Percentage <- (trbv_count_carditis$Freq/sum(trbv_count_carditis$Freq))*100
+
+trbv_count_misc <- as.data.frame(table(misc$trbv_vec, misc$seurat_annot.sample))
+trbv_count_misc$Condition <- "MIS-C"
+trbv_count_misc$Percentage <- (trbv_count_misc$Freq/sum(trbv_count_misc$Freq))*100
+
+
+carditis <- carditis[sample(nrow(carditis), nrow(chd)), ]
+misc <- misc[sample(nrow(misc), nrow(chd)), ]
+
+Vgene_df <- rbind(trbv_count, trbv_count_carditis, trbv_count_misc)
+
+colnames(Vgene_df)[1] <- "Vgene"
+
+cast.vgenes <- dcast(Vgene_df, Vgene~Var2)
+cast.vgenes <- replace(cast.vgenes,is.na(cast.vgenes),0)
+
+chd_sem <- c()
+carditis_sem <- c()
+misc_sem <- c()
+
+std.error <- function(x) sd(x)/sqrt(length(x))
+
+
+for(i in 1:nrow(cast.vgenes)){
+  chd_sem[i] <- std.error(cast.vgenes[i,2:5])
+  carditis_sem[i] <- std.error(cast.vgenes[i,6:9])
+  misc_sem[i] <- std.error(cast.vgenes[i,10:13])
+}
+
+cast.vgenes$chd_sem <- chd_sem
+cast.vgenes$carditis_sem <- carditis_sem
+cast.vgenes$misc_sem <- misc_sem
+
+
+```
+
+
+
+```{r}
+# Plot V usage
+
+trbv_count <- as.data.frame(table(chd$trbv_vec))
+trbv_count$Condition <- "HD"
+trbv_count$Percentage <- (trbv_count$Freq/sum(trbv_count$Freq))*100
+colnames(trbv_count)[1] <- "Vgene"
+trbv_sem <- left_join(trbv_count, cast.vgenes)
+trbv_sem[,18:19] <- NULL
+colnames(trbv_sem)[17] <- "sem"
+
+trbv_count_carditis <- as.data.frame(table(carditis$trbv_vec))
+trbv_count_carditis$Condition <- "Carditis"
+trbv_count_carditis$Percentage <- (trbv_count_carditis$Freq/sum(trbv_count_carditis$Freq))*100
+colnames(trbv_count_carditis)[1] <- "Vgene"
+trbv_sem_carditis <- left_join(trbv_count_carditis, cast.vgenes)
+trbv_sem_carditis[,c(17,19)] <- NULL
+colnames(trbv_sem_carditis)[17] <- "sem"
+
+trbv_count_misc <- as.data.frame(table(misc$trbv_vec))
+trbv_count_misc$Condition <- "MIS-C"
+trbv_count_misc$Percentage <- (trbv_count_misc$Freq/sum(trbv_count_misc$Freq))*100
+colnames(trbv_count_misc)[1] <- "Vgene"
+trbv_sem_misc <- left_join(trbv_count_misc, cast.vgenes)
+trbv_sem_misc[,c(17,18)] <- NULL
+colnames(trbv_sem_misc)[17] <- "sem"
+
+# 3 groups
+
+Vgene_df <- rbind(trbv_sem, trbv_sem_carditis, trbv_sem_misc)
+
+Vgene_df <- Vgene_df %>% arrange(Condition, desc(Percentage))
+
+
+p1 <- 
+  Vgene_df %>%
+  mutate(Vgene=reorder(Vgene,Percentage)) %>% 
+  ggplot(aes(x = Vgene, y = Percentage, fill = Condition))  + 
+  geom_bar(position="dodge", stat="identity") +
+  geom_errorbar(aes(ymin=Percentage-sem, ymax=Percentage+sem), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1, size = 8)) +
+  scale_fill_manual(values = c("#3498DB", "#E74C3C", "#31a354")) +
+  ylab("Percentage of cells") +
+  xlab(" ") 
+
+ggsave(p1, file = "scRepertoire/Vgene_dist_CHDvsCarditisvsMISC_CTLsProlif.pdf", height= 3, width = 7.5)
+
+```
+
+
+PCA 
+
+```{r}
+cdr3_df <- read.csv("scRepertoire/cdr3_vgene_jgene_allTCR_condition_sep.csv")
+rownames(cdr3_df) <- cdr3_df$X
+cdr3_df[,1] <- NULL
+
+## Iterate on annotations
+cdr3_prolif <- cdr3_df %>% filter(seurat_annot.Tcell_Annotation %in% c("Prolif T", "CD4 cytotoxic T", "CD8 cytotoxic T"))
+table(cdr3_prolif$seurat_annot.sample)  
+chd <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "C.HD",]
+carditis <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "Carditis",]
+carditis <- carditis[sample(nrow(carditis), 169), ]
+Vgene_df <- rbind(chd, carditis)
+
+TRBV_df <- as.matrix(table(Vgene_df$trbv_vec, Vgene_df$seurat_annot.sample))
+trbv_t <- t(TRBV_df)
+res.pca <- prcomp(trbv_t, scale = TRUE)
+
+pca_df <- as.data.frame(res.pca$x)
+pca_df$sample <- rownames(pca_df)
+pca_df$condition <- c(rep("Carditis", 4), rep("C.HD", 4))
+pca_df$condition <- factor(pca_df$condition, levels = c("C.HD", "Carditis"))
+write.csv(pca_df, file = "PCA_matrix_prolif.csv")
+p1 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = condition)) + geom_point() +
+      theme_classic(base_size = 8)
+ggsave(p1, file = "scRepertoire/PCA_Vgene_Prolif.pdf", height= 2, width = 3)
+
+
+## Iterate on annotations
+cdr3_cd8 <- cdr3_df %>% filter(seurat_annot.Tcell_Annotation %in% c("CD8 TEMRA", "CD8 cytotoxic T", "CD4/CD8 mixed memory T", "Prolif T"))
+table(cdr3_cd8$seurat_annot.Condition)   
+chd <- cdr3_cd8[cdr3_cd8$seurat_annot.Condition == "C.HD",]
+carditis <- cdr3_cd8[cdr3_cd8$seurat_annot.Condition == "Carditis",]
+carditis <- carditis[sample(nrow(carditis), 1215), ]
+Vgene_df <- rbind(chd, carditis)
+
+TRBV_df <- as.matrix(table(Vgene_df$trbv_vec, Vgene_df$seurat_annot.sample))
+trbv_t <- t(TRBV_df)
+res.pca <- prcomp(trbv_t, scale = TRUE)
+
+pca_df <- as.data.frame(res.pca$x)
+pca_df$sample <- rownames(pca_df)
+pca_df$condition <- c(rep("Carditis", 4), rep("C.HD", 4))
+pca_df$condition <- factor(pca_df$condition, levels = c("C.HD", "Carditis"))
+write.csv(pca_df, file = "PCA_matrix_CD8.csv")
+p1 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = condition)) + geom_point() +
+      theme_classic(base_size = 8)
+ggsave(p1, file = "scRepertoire/PCA_Vgene_CD8.pdf", height= 2, width = 3)
+
+
+
+
+```
+
+
+
+
+
+

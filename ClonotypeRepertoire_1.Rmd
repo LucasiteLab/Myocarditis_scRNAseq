@@ -1,0 +1,132 @@
+---
+title: "Carditis_scRepertoire"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(scRepertoire)
+library(dplyr)
+library(data.table)
+```
+
+```{r}
+booster_folders <- c('B1-TCR_VHT_cellranger', 'B2-TCR_VHT_cellranger', 'B3-TCR_VHT_cellranger', 'B4-TCR_VHT_cellranger')
+myo_folders <- c('Y165.1-TCR_VHT_cellranger', 'Y167.1-TCR_VHT_cellranger', 'Y170.1-TCR_VHT_cellranger', 'Y172.1-TCR_VHT_cellranger')
+healthy_folders <- c('Y28.2-TCR_VHT_cellranger', 'Y28.4-TCR_VHT_cellranger', 'Y29.2-TCR_VHT_cellranger', 'Y54.4-TCR_VHT_cellranger')
+recovered_folders <- c('165.1R-TCR_VHT_cellranger', '170.1R-TCR_VHT_cellranger', '172.1R-TCR_VHT_cellranger')
+
+
+booster_dir <- 'DiversityAnalysis/changeo_inputs_outputs/booster/booster_data/'
+myo_dir <- 'DiversityAnalysis/changeo_inputs_outputs/myocarditis/myo_data/'
+healthy_dir <- 'DiversityAnalysis/changeo_inputs_outputs/healthy/healthy_data/'
+recovered_dir <- 'DiversityAnalysis/changeo_inputs_outputs/recovered/recovered_data/'
+
+
+list_contig_csvs <- list()
+
+
+for(i in 1:length(booster_folders)){
+  list_contig_csvs[[i]] <- read.csv(paste0(booster_dir, booster_folders[i], "/filtered_contig_annotations.csv"))
+}
+
+for(i in 1:length(myo_folders)){
+  list_contig_csvs[[4 + i]] <- read.csv(paste0(myo_dir, myo_folders[i], "/filtered_contig_annotations.csv"))
+}
+
+for(i in 1:length(healthy_folders)){
+  list_contig_csvs[[8 + i]] <- read.csv(paste0(healthy_dir, healthy_folders[i], "/filtered_contig_annotations.csv"))
+}
+
+for(i in 1:length(recovered_folders)){
+  list_contig_csvs[[12 + i]] <- read.csv(paste0(recovered_dir, recovered_folders[i], "/filtered_contig_annotations.csv"))
+}
+
+
+names <- c(booster_folders, myo_folders, healthy_folders, recovered_folders)
+
+names(list_contig_csvs) <- names
+
+head(list_contig_csvs[[1]])
+
+```
+
+```{r}
+combined <- combineTCR(list_contig_csvs, 
+                samples = c("B1", "B2", "B3", "B4", 
+                            "Y165-1","Y167-1", "Y170-1", "Y172-1",
+                            "Y28-2", "Y28-4", "Y29-2", "Y54-4",
+                            "Y165-1R", "Y170-1R", "Y172-1R"), 
+                ID = c(rep("Booster", 4), rep("Carditis", 4), rep("Healthy", 4), rep("Recovered", 3)), 
+                cells ="T-AB", filterMulti = TRUE, removeNA = TRUE)
+
+saveRDS(combined, "combined_contigs_allTCR.rds")
+combined <- readRDS("ClonotypeAnalysis/combined_contigs_allTCR.rds")
+
+p00 <- quantContig(combined, cloneCall="gene+nt", scale = T)
+ggsave(p00, file = "unique_clonotypes_allgroups.pdf")
+p01 <- abundanceContig(combined, cloneCall = "gene+nt", scale = F)
+ggsave(p01, file = "abundance_clonotypes_allgroups.pdf")
+```
+
+Read in Seurat
+
+```{r}
+Convert("carditis_v3.2_annotation_nolayers.h5ad", dest = "h5seurat", overwrite = TRUE)
+tcell <- LoadH5Seurat("carditis_v3.2_annotation_nolayers.h5seurat")
+tcell
+saveRDS(tcell, file = "carditis_v3.2_annotation_seurat_final.rds")
+seurat <- readRDS("DiversityAnalysis/carditis_v3.2_annotation_seurat_final.rds")
+```
+
+
+Subset on Prolif T, CD4 CTL, and CD8 CTL as separate figures
+
+```{r}
+Idents(seurat) <- "General_Annotation"
+seurat_cd8mem <- subset(seurat, idents = c('CD4 CTL'))
+Idents(seurat_cd8mem) <- "Condition"
+seurat_cd8mem <- subset(seurat_cd8mem, idents = c('Healthy', 'Booster', 'Carditis', 'Recovered'))
+```
+
+Change meta data rownames to be compatible with "combined"
+```{r}
+meta <- seurat_cd8mem@meta.data
+
+seq_id <- seurat_cd8mem@meta.data[,2]
+vec <- sapply(seq_id, function(foo) {strsplit(foo, split = '_')[[1]][1]})
+meta$orig.barcode <- vec
+barcodes <- paste(meta$sample, meta$Condition, vec, sep = "_")
+
+rownames(meta) <- barcodes
+seurat_cd8mem@meta.data <- meta
+
+```
+
+
+```{r}
+seurat_subset <- combineExpression(combined, seurat_cd8mem, group.by = "sample")
+```
+
+
+```{r}
+sample_df <- data.frame(sample = c("B1", "B2", "B3", "B4", "Y165-1","Y167-1", "Y170-1", "Y172-1",
+                                  "Y28-2", "Y28-4", "Y29-2", "Y54-4", "Y165-1R", "Y170-1R", "Y172-1R"), 
+                        paper_not = c("B1", "B2", "B3", "B4", "P1", "P2", "P3", "P4",
+                                      "HD1", "HD2", "HD3", "HD4", "R1", "R2", "R3"))
+meta <- seurat_subset@meta.data
+meta <- left_join(meta, sample_df)
+meta$Condition <- factor(meta$Condition, levels = c("Healthy", "Booster", "Carditis", "Recovered"))
+meta$Condition <- factor(meta$paper_not, levels = c("B1", "B2", "B3", "B4", "P1", "P2", "P3", "P4",
+                                                 "HD1", "HD2", "HD3", "HD4", "R1", "R2", "R3"))
+seurat_subset@meta.data <- meta
+
+write.csv(meta, "cd4ctl_clonetype_df.csv")
+
+```
+

@@ -1,0 +1,159 @@
+---
+title: "ClonotypeRepertoire"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(scRepertoire)
+library(dplyr)
+library(data.table)
+```
+
+Put together dfs - based on CTstrict definition (Change for CTgene or CTaa)
+
+
+```{r}
+# Prolif
+
+## Seurat metadata with clonetype information
+prolif <- read.csv("prolif_clonetype_df.csv") 
+clonetype_df_list <- group_split(prolif, paper_not) # split by donor name
+
+final_list <- list()
+
+for(i in 1:length(clonetype_df_list)){
+  these_cells <- clonetype_df_list[[i]]
+  these_freq <- data.frame(table(these_cells$CTaa))
+  these_freq$sample <- rep(these_cells$paper_not[1], nrow(these_freq))
+  these_freq$cloneType <- rep("Placeholder", nrow(these_freq))
+  for(j in 1:nrow(these_freq)){
+    prop_vec <- these_freq$Freq
+    prop <- prop_vec[j]
+    category <- these_freq$cloneType[i]
+    if(prop == 1){
+      category <- "Single"
+    } else if ((prop > 0) & (prop <= 5)) {
+      category <- "Small"
+    } else if ((prop > 5) & (prop <= 10)) {
+      category <- "Medium"
+    } else if ((prop > 10) & (prop <= 50)) {
+      category <- "Large"
+    } else if ((prop > 50) & (prop <= 100)) {
+      category <- "Hyperexpanded"
+    }
+    these_freq$cloneType[j] <- category
+  }
+  final_list[[i]] <- these_freq
+}
+
+prolif_clonotypes <- rbindlist(final_list)
+
+# CD8s 
+cd8 <- read.csv("cd8ctl_clonetype_df.csv") # read in seurat meta data (each row is a cell)
+clonetype_df_list <- group_split(cd8, paper_not)
+
+final_list <- list()
+
+for(i in 1:length(clonetype_df_list)){
+  these_cells <- clonetype_df_list[[i]]
+  these_freq <- data.frame(table(these_cells$CTaa))
+  these_freq$sample <- rep(these_cells$paper_not[1], nrow(these_freq))
+  these_freq$cloneType <- rep("Placeholder", nrow(these_freq))
+  for(j in 1:nrow(these_freq)){
+    prop_vec <- these_freq$Freq
+    prop <- prop_vec[j]
+    category <- these_freq$cloneType[i]
+    if(prop == 1){
+      category <- "Single"
+    } else if ((prop > 0) & (prop <= 5)) {
+      category <- "Small"
+    } else if ((prop > 5) & (prop <= 10)) {
+      category <- "Medium"
+    } else if ((prop > 10) & (prop <= 50)) {
+      category <- "Large"
+    } else if ((prop > 50) & (prop <= 100)) {
+      category <- "Hyperexpanded"
+    }
+    these_freq$cloneType[j] <- category
+  }
+  final_list[[i]] <- these_freq
+}
+
+cd8_clonotypes <- rbindlist(final_list)
+
+# CD4s
+
+cd4 <- read.csv("cd4ctl_clonetype_df.csv") # read in seurat meta data (each row is a cell)
+clonetype_df_list <- group_split(cd4, paper_not)
+
+final_list <- list()
+
+for(i in 1:length(clonetype_df_list)){
+  these_cells <- clonetype_df_list[[i]]
+  these_freq <- data.frame(table(these_cells$CTaa))
+  these_freq$sample <- rep(these_cells$paper_not[1], nrow(these_freq))
+  these_freq$cloneType <- rep("Placeholder", nrow(these_freq))
+  for(j in 1:nrow(these_freq)){
+    prop_vec <- these_freq$Freq
+    prop <- prop_vec[j]
+    category <- these_freq$cloneType[i]
+    if(prop == 1){
+      category <- "Single"
+    } else if ((prop > 0) & (prop <= 5)) {
+      category <- "Small"
+    } else if ((prop > 5) & (prop <= 10)) {
+      category <- "Medium"
+    } else if ((prop > 10) & (prop <= 50)) {
+      category <- "Large"
+    } else if ((prop > 50) & (prop <= 100)) {
+      category <- "Hyperexpanded"
+    }
+    these_freq$cloneType[j] <- category
+  }
+  final_list[[i]] <- these_freq
+}
+
+cd4_clonotypes <- rbindlist(final_list)
+
+prolif_clonotypes$Annotation <- "Prolif T"
+cd8_clonotypes$Annotation <- "CD8 CTL"
+cd4_clonotypes$Annotation <- "CD4 CTL"
+
+all_clonotypes <- rbind(prolif_clonotypes, cd8_clonotypes, cd4_clonotypes)
+write.csv(all_clonotypes, "CTaa_allclonotypes.csv") 
+
+# clonetypes can be by gene, by aa, or both (strictest definition)
+```
+
+
+What proportion of the total pool are small, medium, or large expansions? 
+
+```{r}
+all_clonotypes <- read.csv("CTaa_allclonotypes.csv")
+all_clonotypes$cloneType <- factor(all_clonotypes$cloneType, levels = c("Large", "Medium", "Small", "Single"))
+p1 <- ggplot(all_clonotypes, aes(x = sample, y = Freq, fill = cloneType)) + 
+      geom_bar(position="stack", stat="identity") +
+      facet_grid(. ~ Annotation) +
+      theme_bw(base_size = 11) +
+      theme(axis.text.x = element_text(angle = 45, hjust=1, size = 8)) +
+      theme(strip.background = element_blank(), 
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            legend.text = element_text(size = 8),
+            legend.title = element_text(size =8), 
+            ) +
+      scale_fill_manual(values = c("#E7298A", "#1B9E77", "#D95F02", "#7570B3" )) +
+      ylab("Clonal Abundance") +
+      xlab(" ") 
+#+ scale_y_continuous(expand = c(0,0))
+p1
+
+ggsave(p1, file = "CTaa_repertoire.pdf", height= 2.5, width = 8)
+```
+
