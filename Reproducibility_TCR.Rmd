@@ -1,0 +1,186 @@
+---
+title: "Reproducing_TCR_Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Diversity Reproducibility
+
+```{r}
+diversity.matrix <- read.csv('diversity_nonnaiveCD8specific_down.csv')
+
+diversity_list <- list()
+
+for(i in 1:3){
+  diversity_list[[i]] <- diversity.matrix[diversity.matrix$q==i-1, ] 
+}
+
+for(i in 4:5){
+  temp.matrix <- diversity.matrix[diversity.matrix$q==i-3, ]
+  temp.matrix.1 <- diversity.matrix[diversity.matrix$q==0, ]
+  temp.matrix[, 'd'] <- temp.matrix[, 'd'] / temp.matrix.1[, 'd']
+  diversity_list[[i]] <- temp.matrix
+}
+
+names(diversity_list) <- c("Richness", "Shannon", "Simpson", "Shannon.Richness", "Simpson.Richness")
+
+
+write.csv(diversity_list$Richness, file = "diversity_richness_cd8_processed.csv")
+write.csv(diversity_list$Shannon.Richness, file = "diversity_shannonrichness_cd8_processed.csv")
+
+      
+```
+
+
+# Clonetype Barchart Reproducibility
+
+```{r}
+all_clonotypes <- read.csv("CTaa_allclonotypes.csv")
+all_clonotypes$cloneType <- factor(all_clonotypes$cloneType, levels = c("Large", "Medium", "Small", "Single"))
+p1 <- ggplot(all_clonotypes, aes(x = sample, y = Freq, fill = cloneType)) + 
+      geom_bar(position="stack", stat="identity") +
+      facet_grid(. ~ Annotation) +
+      theme_bw(base_size = 11) +
+      theme(axis.text.x = element_text(angle = 45, hjust=1, size = 8)) +
+      theme(strip.background = element_blank(), 
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            legend.text = element_text(size = 8),
+            legend.title = element_text(size =8), 
+            ) +
+      scale_fill_manual(values = c("#E7298A", "#1B9E77", "#D95F02", "#7570B3" )) +
+      ylab("Clonal Abundance") +
+      xlab(" ") 
+#+ scale_y_continuous(expand = c(0,0))
+p1
+
+```
+
+# VDJ Dist Reproducibility
+
+```{r}
+
+cdr3_df <- read.csv("cdr3_vgene_jgene_allTCR_condition_sep.csv")
+rownames(cdr3_df) <- cdr3_df$X
+cdr3_df[,1] <- NULL
+table(cdr3_df$seurat_annot.Condition)   
+
+## Iterate on annotations
+cdr3_prolif <- cdr3_df %>% filter(seurat_annot.Tcell_Annotation %in% c("Prolif T", "CD4 cytotoxic T", "CD8 cytotoxic T"))
+table(cdr3_prolif$seurat_annot.Condition)  
+chd <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "C.HD",]
+carditis <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "Carditis",]
+misc <- cdr3_prolif[cdr3_prolif$seurat_annot.Condition == "MIS-C",]
+
+carditis <- carditis[sample(nrow(carditis), nrow(chd)), ]
+misc <- misc[sample(nrow(misc), nrow(chd)), ]
+
+
+```
+
+
+Add error bars (SEM) - Repeat above, preserving patients
+
+```{r}
+trbv_count <- as.data.frame(table(chd$trbv_vec, chd$seurat_annot.sample))
+trbv_count$Condition <- "HD"
+trbv_count$Percentage <- (trbv_count$Freq/sum(trbv_count$Freq))*100
+
+trbv_count_carditis <- as.data.frame(table(carditis$trbv_vec, carditis$seurat_annot.sample))
+trbv_count_carditis$Condition <- "Carditis"
+trbv_count_carditis$Percentage <- (trbv_count_carditis$Freq/sum(trbv_count_carditis$Freq))*100
+
+trbv_count_misc <- as.data.frame(table(misc$trbv_vec, misc$seurat_annot.sample))
+trbv_count_misc$Condition <- "MIS-C"
+trbv_count_misc$Percentage <- (trbv_count_misc$Freq/sum(trbv_count_misc$Freq))*100
+
+
+carditis <- carditis[sample(nrow(carditis), nrow(chd)), ]
+misc <- misc[sample(nrow(misc), nrow(chd)), ]
+
+Vgene_df <- rbind(trbv_count, trbv_count_carditis, trbv_count_misc)
+
+colnames(Vgene_df)[1] <- "Vgene"
+
+cast.vgenes <- dcast(Vgene_df, Vgene~Var2)
+cast.vgenes <- replace(cast.vgenes,is.na(cast.vgenes),0)
+
+chd_sem <- c()
+carditis_sem <- c()
+misc_sem <- c()
+
+std.error <- function(x) sd(x)/sqrt(length(x))
+
+
+for(i in 1:nrow(cast.vgenes)){
+  chd_sem[i] <- std.error(cast.vgenes[i,2:5])
+  carditis_sem[i] <- std.error(cast.vgenes[i,6:9])
+  misc_sem[i] <- std.error(cast.vgenes[i,10:13])
+}
+
+cast.vgenes$chd_sem <- chd_sem
+cast.vgenes$carditis_sem <- carditis_sem
+cast.vgenes$misc_sem <- misc_sem
+
+
+```
+
+
+
+```{r}
+# Plot V usage
+
+trbv_count <- as.data.frame(table(chd$trbv_vec))
+trbv_count$Condition <- "HD"
+trbv_count$Percentage <- (trbv_count$Freq/sum(trbv_count$Freq))*100
+colnames(trbv_count)[1] <- "Vgene"
+trbv_sem <- left_join(trbv_count, cast.vgenes)
+trbv_sem[,18:19] <- NULL
+colnames(trbv_sem)[17] <- "sem"
+
+trbv_count_carditis <- as.data.frame(table(carditis$trbv_vec))
+trbv_count_carditis$Condition <- "Carditis"
+trbv_count_carditis$Percentage <- (trbv_count_carditis$Freq/sum(trbv_count_carditis$Freq))*100
+colnames(trbv_count_carditis)[1] <- "Vgene"
+trbv_sem_carditis <- left_join(trbv_count_carditis, cast.vgenes)
+trbv_sem_carditis[,c(17,19)] <- NULL
+colnames(trbv_sem_carditis)[17] <- "sem"
+
+trbv_count_misc <- as.data.frame(table(misc$trbv_vec))
+trbv_count_misc$Condition <- "MIS-C"
+trbv_count_misc$Percentage <- (trbv_count_misc$Freq/sum(trbv_count_misc$Freq))*100
+colnames(trbv_count_misc)[1] <- "Vgene"
+trbv_sem_misc <- left_join(trbv_count_misc, cast.vgenes)
+trbv_sem_misc[,c(17,18)] <- NULL
+colnames(trbv_sem_misc)[17] <- "sem"
+
+# 3 groups
+
+Vgene_df <- rbind(trbv_sem, trbv_sem_carditis, trbv_sem_misc)
+
+Vgene_df <- Vgene_df %>% arrange(Condition, desc(Percentage))
+
+write.csv(Vgene_df, "Vgene_dist_processed_HDvCarditisvMIS-C.csv")
+
+p1 <- 
+  Vgene_df %>%
+  mutate(Vgene=reorder(Vgene,Percentage)) %>% 
+  ggplot(aes(x = Vgene, y = Percentage, fill = Condition))  + 
+  geom_bar(position="dodge", stat="identity") +
+  geom_errorbar(aes(ymin=Percentage-sem, ymax=Percentage+sem), width=.2,
+                 position=position_dodge(.9)) +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1, size = 8)) +
+  scale_fill_manual(values = c("#3498DB", "#E74C3C", "#31a354")) +
+  ylab("Percentage of cells") +
+  xlab(" ") 
+
+ggsave(p1, file = "scRepertoire/Vgene_dist_CHDvsCarditisvsMISC_CTLsProlif.pdf", height= 3, width = 7.5)
+
+
+
+```
+
